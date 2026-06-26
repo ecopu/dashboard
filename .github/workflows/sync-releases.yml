@@ -1,0 +1,82 @@
+name: 同步上游 Release 二进制文件
+
+on:
+  schedule:
+    - cron: '0 18 * * *'
+  workflow_dispatch: # 允许手动触发
+
+jobs:
+  sync-v1-releases:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Sync Missing Releases (>= v1.0.0)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # 【注意】如果是 agent 仓库，请把下面这行的 nezha/nezha 改为 nezhahq/agent
+          UPSTREAM_REPO="nezhahq/nezha"
+          MY_REPO="${{ github.repository }}"
+          
+          echo "正在获取上游仓库 $UPSTREAM_REPO 的 Release 列表..."
+          
+          # 1. 获取上游所有的 tag 列表（按发布时间从旧到新排序）
+          ALL_RELEASES=$(gh api "repos/$UPSTREAM_REPO/releases?page=1&per_page=100" --jq '.[] | .tag_name' | tac)
+          
+          # 2. 循环遍历每一个上游版本
+          for TAG in $ALL_RELEASES; do
+            
+            # --- 版本过滤逻辑 ---
+            # 如果 Tag 是以 v0. 开头，或者等于 v0，直接跳过不处理
+            if [[ "$TAG" =~ ^v0\. ]]; then
+              echo "⏭️ 跳过低于 v1.0.0 的老版本: $TAG"
+              continue
+            fi
+            # --------------------
+
+            echo "----------------------------------------------"
+            echo "检查符合条件的版本: $TAG"
+            
+            # 检查本地仓库是否存在该 Tag 的 Release
+            LOCAL_EXISTS=$(gh release view "$TAG" --repo "$MY_REPO" >/dev/null 2>&1 && echo "true" || echo "false")
+            
+            if [ "$LOCAL_EXISTS" = "true" ]; then
+              echo "✅ 版本 $TAG 在你的仓库中已存在，跳过。"
+              continue
+            fi
+            
+            echo "❌ 发现缺失版本 $TAG，开始同步..."
+            
+            # 创建干净的临时目录存放当前版本的附件
+            mkdir -p ./downloads
+            rm -rf ./downloads/*
+            
+            # 下载该版本的资产
+            echo "正在下载 $TAG 的二进制文件..."
+            if ! gh release download "$TAG" --repo "$UPSTREAM_REPO" --dir ./downloads; then
+              echo "⚠️ 下载 $TAG 失败，可能该版本没有上传附件，跳过。"
+              continue
+            fi
+            
+            # 获取该版本的标题和正文
+            gh api "repos/$UPSTREAM_REPO/releases/tags/$TAG" --jq '.name' > ./title.txt
+            gh api "repos/$UPSTREAM_REPO/releases/tags/$TAG" --jq '.body' > ./body.txt
+            
+            TITLE=$(cat ./title.txt)
+            
+            # 在你的仓库中创建对应的 Release 并上传附件
+            echo "正在你的仓库中创建 Release: $TITLE ($TAG)"
+            if gh release create "$TAG" ./downloads/* \
+              --title "$TITLE" \
+              --notes-file ./body.txt \
+              --repo "$MY_REPO"; then
+              echo "🎉 成功同步版本 $TAG !"
+            else
+              echo "❌ 创建 Release $TAG 失败。"
+            fi
+            
+            # 稍微等待防止触发 API 频率限制
+            sleep 3
+          done
