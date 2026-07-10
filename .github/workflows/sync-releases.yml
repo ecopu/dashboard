@@ -6,13 +6,13 @@ on:
   workflow_dispatch: # 允许手动触发
 
 jobs:
-  sync-and-rename:
+  sync-release:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Sync, Rename and Upload
+      - name: Sync and Upload
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -79,3 +79,11 @@ jobs:
             # 稍微等待防止触发 API 频率限制
             sleep 3
           done
+          
+  workflow-keepalive:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - uses: liskin/gh-workflow-keepalive@v1
